@@ -12,8 +12,8 @@ use Andi\GraphQL\ObjectFieldResolver\ObjectFieldResolver;
 use Andi\GraphQL\ObjectFieldResolver\ObjectFieldResolverInterface;
 use Andi\GraphQL\Spiral\Command\ConfigCommand;
 use Andi\GraphQL\Spiral\Common\SchemaWarmupper;
-use Andi\GraphQL\Spiral\Config\GraphQLConfig;
 use Andi\GraphQL\Spiral\Common\ValueResolver;
+use Andi\GraphQL\Spiral\Config\GraphQLConfig;
 use Andi\GraphQL\Spiral\Listener\AdditionalFieldListener;
 use Andi\GraphQL\Spiral\Listener\AttributedMutationFieldListener;
 use Andi\GraphQL\Spiral\Listener\AttributedQueryFieldListener;
@@ -81,7 +81,9 @@ final class GraphQLBootloader extends Bootloader
             'url' => $env->get('GRAPHQL_URL', '/api/graphql'),
         ]);
 
-        $http->addMiddleware(GraphQLMiddleware::class);
+        if (!empty($this->configurator->getConfig('graphql')['url'])) {
+            $http->addMiddleware(GraphQLMiddleware::class);
+        }
 
         $console->addCommand(ConfigCommand::class);
         $kernel->bootstrapped(static function (Schema $schema): void {
