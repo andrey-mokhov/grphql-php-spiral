@@ -8,6 +8,13 @@ use Andi\GraphQL\ArgumentResolver\ArgumentResolver;
 use Andi\GraphQL\ArgumentResolver\ArgumentResolverInterface;
 use Andi\GraphQL\InputObjectFieldResolver\InputObjectFieldResolver;
 use Andi\GraphQL\InputObjectFieldResolver\InputObjectFieldResolverInterface;
+use Andi\GraphQL\ObjectFieldResolver\Middleware\AbstractObjectFieldByReflectionMethodMiddleware;
+use Andi\GraphQL\ObjectFieldResolver\Middleware\AbstractOuterObjectFieldByReflectionMethodMiddleware;
+use Andi\GraphQL\ObjectFieldResolver\Middleware\AdditionalFieldByReflectionMethodMiddleware;
+use Andi\GraphQL\ObjectFieldResolver\Middleware\InterfaceFieldByReflectionMethodMiddleware;
+use Andi\GraphQL\ObjectFieldResolver\Middleware\MutationFieldByReflectionMethodMiddleware;
+use Andi\GraphQL\ObjectFieldResolver\Middleware\ObjectFieldByReflectionMethodMiddleware;
+use Andi\GraphQL\ObjectFieldResolver\Middleware\QueryFieldByReflectionMethodMiddleware;
 use Andi\GraphQL\ObjectFieldResolver\ObjectFieldResolver;
 use Andi\GraphQL\ObjectFieldResolver\ObjectFieldResolverInterface;
 use Andi\GraphQL\Spiral\Command\ConfigCommand;
@@ -34,12 +41,14 @@ use GraphQL\Type\Definition as Webonyx;
 use GraphQL\Type\Schema;
 use GraphQL\Type\SchemaConfig;
 use Psr\Container\ContainerInterface;
+use Spiral\Attributes\ReaderInterface;
 use Spiral\Boot\AbstractKernel;
 use Spiral\Boot\Bootloader\Bootloader;
 use Spiral\Boot\EnvironmentInterface;
 use Spiral\Bootloader\Http\HttpBootloader;
 use Spiral\Config\ConfiguratorInterface;
 use Spiral\Console\Bootloader\ConsoleBootloader;
+use Spiral\Core\Internal\Proxy;
 use Spiral\Core\InvokerInterface;
 use Spiral\Core\ScopeInterface;
 use Spiral\Tokenizer\TokenizerListenerRegistryInterface;
@@ -64,6 +73,15 @@ final class GraphQLBootloader extends Bootloader
         ObjectFieldResolver::class => [self::class, 'buildObjectFieldResolver'],
         InputObjectFieldResolver::class => [self::class, 'buildInputObjectFieldResolver'],
         ArgumentResolver::class => [self::class, 'buildArgumentResolver'],
+    ];
+
+    protected const BINDINGS = [
+        QueryFieldByReflectionMethodMiddleware::class => [self::class, 'buildQueryFieldByReflectionMethodMiddleware'],
+        MutationFieldByReflectionMethodMiddleware::class => [self::class, 'buildMutationFieldByReflectionMethodMiddleware'],
+        AdditionalFieldByReflectionMethodMiddleware::class => [self::class, 'buildAdditionalFieldByReflectionMethodMiddleware'],
+
+        ObjectFieldByReflectionMethodMiddleware::class => [self::class, 'buildObjectFieldByReflectionMethodMiddleware'],
+        InterfaceFieldByReflectionMethodMiddleware::class => [self::class, 'buildInterfaceFieldByReflectionMethodMiddleware'],
     ];
 
     public function __construct(
@@ -157,7 +175,7 @@ final class GraphQLBootloader extends Bootloader
         TypeResolverInterface $typeResolver,
     ): void {
         foreach ($types as $name => $aliases) {
-            $aliases = (array) $aliases;
+            $aliases = (array)$aliases;
             if (\is_int($name)) {
                 $name = \array_shift($aliases);
             }
@@ -177,16 +195,25 @@ final class GraphQLBootloader extends Bootloader
         Schema $schema,
         GraphQLConfig $config,
         ContainerInterface $container,
-        ScopeInterface $scope,
-        InvokerInterface $invoker,
     ): ServerConfig {
         $serverConfig = (new ServerConfig())->setSchema($schema);
+
+        $scope = Proxy::create(
+            new \ReflectionClass(ScopeInterface::class),
+            null,
+            new \Spiral\Core\Attribute\Proxy(),
+        );
+        $invoker = Proxy::create(
+            new \ReflectionClass(InvokerInterface::class),
+            null,
+            new \Spiral\Core\Attribute\Proxy(),
+        );
 
         if ($rootValueName = $config->getRootValue()) {
             $rootValue = $container->get($rootValueName);
             $rootValueFn = \is_callable($rootValue)
                 ? $rootValue
-                : static fn () => $rootValue;
+                : static fn() => $rootValue;
 
             $serverConfig->setRootValue(new ValueResolver($scope, $invoker, $rootValueFn));
         }
@@ -195,7 +222,7 @@ final class GraphQLBootloader extends Bootloader
             $context = $container->get($contextName);
             $contextFn = \is_callable($context)
                 ? $context
-                : static fn () => $context;
+                : static fn() => $context;
 
             $serverConfig->setContext(new ValueResolver($scope, $invoker, $contextFn));
         }
@@ -283,5 +310,129 @@ final class GraphQLBootloader extends Bootloader
         }
 
         return $argumentResolver;
+    }
+
+    private function buildQueryFieldByReflectionMethodMiddleware(
+        ReaderInterface $reader,
+        TypeRegistryInterface $typeRegistry,
+        ArgumentResolverInterface $argumentResolver,
+    ): QueryFieldByReflectionMethodMiddleware {
+        return $this->buildAbstractOuterObjectFieldByReflectionMethodMiddleware(
+            QueryFieldByReflectionMethodMiddleware::class,
+            $reader,
+            $typeRegistry,
+            $argumentResolver,
+        );
+    }
+
+    private function buildMutationFieldByReflectionMethodMiddleware(
+        ReaderInterface $reader,
+        TypeRegistryInterface $typeRegistry,
+        ArgumentResolverInterface $argumentResolver,
+    ): MutationFieldByReflectionMethodMiddleware {
+        return $this->buildAbstractOuterObjectFieldByReflectionMethodMiddleware(
+            MutationFieldByReflectionMethodMiddleware::class,
+            $reader,
+            $typeRegistry,
+            $argumentResolver,
+        );
+    }
+
+    private function buildAdditionalFieldByReflectionMethodMiddleware(
+        ReaderInterface $reader,
+        TypeRegistryInterface $typeRegistry,
+        ArgumentResolverInterface $argumentResolver,
+    ): AdditionalFieldByReflectionMethodMiddleware {
+        return $this->buildAbstractOuterObjectFieldByReflectionMethodMiddleware(
+            AdditionalFieldByReflectionMethodMiddleware::class,
+            $reader,
+            $typeRegistry,
+            $argumentResolver,
+        );
+    }
+
+    /**
+     * @param class-string<AbstractOuterObjectFieldByReflectionMethodMiddleware> $class
+     */
+    private function buildAbstractOuterObjectFieldByReflectionMethodMiddleware(
+        string $class,
+        ReaderInterface $reader,
+        TypeRegistryInterface $typeRegistry,
+        ArgumentResolverInterface $argumentResolver,
+    ): AbstractOuterObjectFieldByReflectionMethodMiddleware {
+        $scope = Proxy::create(
+            new \ReflectionClass(ScopeInterface::class),
+            null,
+            new \Spiral\Core\Attribute\Proxy(),
+        );
+        $invoker = Proxy::create(
+            new \ReflectionClass(InvokerInterface::class),
+            null,
+            new \Spiral\Core\Attribute\Proxy(),
+        );
+
+        return new $class(
+            $reader,
+            $typeRegistry,
+            $argumentResolver,
+            $scope,
+            $invoker,
+        );
+    }
+
+    private function buildObjectFieldByReflectionMethodMiddleware(
+        ReaderInterface $reader,
+        TypeRegistryInterface $typeRegistry,
+        ArgumentResolverInterface $argumentResolver,
+    ): ObjectFieldByReflectionMethodMiddleware {
+        return $this->buildAbstractObjectFieldByReflectionMethodMiddleware(
+            ObjectFieldByReflectionMethodMiddleware::class,
+            $reader,
+            $typeRegistry,
+            $argumentResolver,
+        );
+    }
+
+
+    private function buildInterfaceFieldByReflectionMethodMiddleware(
+        ReaderInterface $reader,
+        TypeRegistryInterface $typeRegistry,
+        ArgumentResolverInterface $argumentResolver,
+    ): InterfaceFieldByReflectionMethodMiddleware {
+        return $this->buildAbstractObjectFieldByReflectionMethodMiddleware(
+            InterfaceFieldByReflectionMethodMiddleware::class,
+            $reader,
+            $typeRegistry,
+            $argumentResolver,
+        );
+    }
+
+    /**
+     * @param class-string<AbstractObjectFieldByReflectionMethodMiddleware> $class
+     */
+    private function buildAbstractObjectFieldByReflectionMethodMiddleware(
+        string $class,
+        ReaderInterface $reader,
+        TypeRegistryInterface $typeRegistry,
+        ArgumentResolverInterface $argumentResolver,
+    ): AbstractObjectFieldByReflectionMethodMiddleware {
+        $scope = Proxy::create(
+            new \ReflectionClass(ScopeInterface::class),
+            null,
+            new \Spiral\Core\Attribute\Proxy(),
+        );
+        $invoker = Proxy::create(
+            new \ReflectionClass(InvokerInterface::class),
+            null,
+            new \Spiral\Core\Attribute\Proxy(),
+        );
+
+        return new $class(
+            $reader,
+            $typeRegistry,
+            $argumentResolver,
+            $scope,
+            $invoker,
+        );
     }
 }
